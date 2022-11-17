@@ -20,9 +20,9 @@ import java.util.Properties;
 
 import org.apache.commons.compress.utils.Lists;
 import org.apache.flink.api.common.functions.RichMapFunction;
-import org.apache.flink.api.common.io.NonParallelInput;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
@@ -57,8 +57,10 @@ public class Main {
                 .deserializer(new JsonDebeziumDeserializationSchema()) // converts SourceRecord to JSON String
                 .build();
 
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setParallelism(1); // set parallelism 1 by default
+        // for local development, also start the Flink UI on http://localhost:8081
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(new Configuration());
+        env.setParallelism(2);
+        env.getCheckpointConfig().setCheckpointInterval(Time.seconds(5).toMilliseconds());
 
         env.addSource(sourceFunction).forceNonParallel()
                 .map(new AuditMetadataEnrichmentFunction()).forceNonParallel()
@@ -112,7 +114,12 @@ public class Main {
 
         @Override
         public void snapshotState(FunctionSnapshotContext functionSnapshotContext) throws Exception {
-            auditState.update(List.of(localAuditState));
+            if (localAuditState == null) {
+                auditState.clear();
+            }
+            else {
+                auditState.update(List.of(localAuditState));
+            }
         }
 
         @Override
