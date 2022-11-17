@@ -30,6 +30,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <log4j.version>2.17.1</log4j.version>
+    <flink.version>1.16.0</flink.version>
   </properties>
 
   <name>My OSS Project</name>
@@ -79,12 +80,17 @@
 	<dependency>
 	    <groupId>org.apache.flink</groupId>
 	    <artifactId>flink-java</artifactId>
-	    <version>1.16.0</version>
+	    <version>${flink.version}</version>
 	</dependency>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-runtime-web</artifactId>
+      <version>${flink.version}</version>
+    </dependency>
 	<dependency>
 	    <groupId>org.apache.flink</groupId>
 	    <artifactId>flink-clients</artifactId>
-	   	<version>1.16.0</version>
+	   	<version>${flink.version}</version>
 	</dependency>
 	<dependency>
       <groupId>com.ververica</groupId>
