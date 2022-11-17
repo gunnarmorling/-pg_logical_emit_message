@@ -15,12 +15,18 @@
  */
 package dev.morling.demos.logicaldecoding;
 
+import java.util.List;
 import java.util.Properties;
 
+import org.apache.commons.compress.utils.Lists;
 import org.apache.flink.api.common.functions.RichMapFunction;
-import org.apache.flink.api.common.state.ValueState;
-import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.io.NonParallelInput;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.state.FunctionInitializationContext;
+import org.apache.flink.runtime.state.FunctionSnapshotContext;
+import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 
@@ -52,30 +58,23 @@ public class Main {
                 .build();
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1); // set parallelism 1 by default
 
-        env.addSource(sourceFunction)
-                .keyBy(v -> 1L)
-                .map(new AuditMetadataEnrichmentFunction())
-                .print()
-                .setParallelism(1);
+        env.addSource(sourceFunction).forceNonParallel()
+                .map(new AuditMetadataEnrichmentFunction()).forceNonParallel()
+                .print();
 
         env.execute();
     }
 
-    public static class AuditMetadataEnrichmentFunction extends RichMapFunction<String, String> {
+    public static class AuditMetadataEnrichmentFunction extends RichMapFunction<String, String> implements CheckpointedFunction {
 
         private static final long serialVersionUID = 1L;
 
-        private final ObjectMapper mapper;
+        private transient ObjectMapper mapper;
 
-        private transient ValueState<AuditState> auditState;
-
-        public AuditMetadataEnrichmentFunction() {
-            mapper = new ObjectMapper();
-            SimpleModule module = new SimpleModule();
-            module.addDeserializer(Message.class, new MessageDeserializer());
-            mapper.registerModule(module);
-        }
+        private transient ListState<AuditState> auditState;
+        private transient AuditState localAuditState;
 
         @Override
         public String map(String value) throws Exception {
@@ -85,16 +84,16 @@ public class Main {
 
             if (op.equals("m")) {
                 Message message = changeEvent.getMessage();
-                auditState.update(new AuditState(txId, message.getContent()));
+                localAuditState = new AuditState(txId, message.getContent());
                 return value;
             }
             else {
-                if (txId != null && auditState.value() != null) {
-                    if (txId.equals(auditState.value().getTxId())) {
-                        changeEvent.setAuditData(auditState.value().getState());
+                if (txId != null && localAuditState != null) {
+                    if (txId.equals(localAuditState.getTxId())) {
+                        changeEvent.setAuditData(localAuditState.getState());
                     }
                     else {
-                        auditState.clear();
+                        localAuditState = null;
                     }
                 }
 
@@ -104,9 +103,33 @@ public class Main {
         }
 
         @Override
-        public void open(Configuration parameters) throws Exception {
-            ValueStateDescriptor<AuditState> descriptor = new ValueStateDescriptor<>("auditState", AuditState.class);
-            auditState = getRuntimeContext().getState(descriptor);
+        public void open(Configuration parameters) {
+            mapper = new ObjectMapper();
+            SimpleModule module = new SimpleModule();
+            module.addDeserializer(Message.class, new MessageDeserializer());
+            mapper.registerModule(module);
+        }
+
+        @Override
+        public void snapshotState(FunctionSnapshotContext functionSnapshotContext) throws Exception {
+            auditState.update(List.of(localAuditState));
+        }
+
+        @Override
+        public void initializeState(FunctionInitializationContext functionInitializationContext) throws Exception {
+            ListStateDescriptor<AuditState> descriptor = new ListStateDescriptor<>("auditState", AuditState.class);
+            auditState = functionInitializationContext.getOperatorStateStore().getListState(descriptor);
+            List<AuditState> auditStates = Lists.newArrayList(auditState.get().iterator());
+            switch (auditStates.size()) {
+                case 0:
+                    localAuditState = null;
+                    break;
+                case 1:
+                    localAuditState = auditStates.get(0);
+                    break;
+                default: // auditStates.size() > 1
+                    throw new IllegalStateException("This mapper is supposed to always run with a parallelism of 1");
+            }
         }
     }
 }
