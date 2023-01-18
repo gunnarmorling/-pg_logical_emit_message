@@ -13,7 +13,7 @@
  *  See the License for the specific language governing permissions and
  *  limitations under the License.
  */
-package dev.morling.demos.logicaldecoding.deserialization;
+package dev.morling.demos.logicaldecoding.common.deserialization;
 
 import java.io.IOException;
 import java.util.Base64;
@@ -25,7 +25,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 
-import dev.morling.demos.logicaldecoding.model.Message;
+import dev.morling.demos.logicaldecoding.common.model.Message;
 
 public class MessageDeserializer extends StdDeserializer<Message> {
 
