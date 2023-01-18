@@ -15,13 +15,15 @@
  */
 package dev.morling.demos.logicaldecoding.auditing;
 
-import java.util.Arrays;
-import java.util.Iterator;
+import java.util.List;
 import java.util.Properties;
 
+import org.apache.commons.compress.utils.Lists;
 import org.apache.flink.api.common.functions.RichFlatMapFunction;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.time.Time;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
@@ -57,13 +59,14 @@ public class AuditMain {
                 .deserializer(new JsonDebeziumDeserializationSchema()) // converts SourceRecord to JSON String
                 .build();
 
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setParallelism(1);
-        
-        env.addSource(sourceFunction)
-                .flatMap(new AuditMetadataEnrichmentFunction())
+        // for local development, also start the Flink UI on http://localhost:8081
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(new Configuration());
+        env.setParallelism(2);
+        env.getCheckpointConfig().setCheckpointInterval(Time.seconds(5).toMilliseconds());
+
+        env.addSource(sourceFunction).forceNonParallel()
+                .flatMap(new AuditMetadataEnrichmentFunction()).forceNonParallel()
                 .print();
-//                .setParallelism(1);
 
         env.execute();
     }
@@ -74,9 +77,7 @@ public class AuditMain {
 
         private transient ObjectMapper mapper;
         private transient ListState<AuditState> auditState;
-
-        public AuditMetadataEnrichmentFunction() {
-        }
+        private transient AuditState localAuditState;
 
         public void flatMap(String value, Collector<String> out) throws Exception {
             ChangeEvent changeEvent = mapper.readValue(value, ChangeEvent.class);
@@ -87,8 +88,9 @@ public class AuditMain {
             if (op.equals("m")) {
                 Message message = changeEvent.getMessage();
 
+                // an audit metadata message
                 if (message.getPrefix().equals("audit")) {
-                    auditState.update(Arrays.asList(new AuditState(txId, message.getContent())));
+                    localAuditState = new AuditState(txId, message.getContent());
                     return;
                 }
                 else {
@@ -96,13 +98,12 @@ public class AuditMain {
                 }
             }
             else {
-                AuditState auditState = retrieveAuditState();
-                if (txId != null && auditState != null) {
-                    if (txId.equals(auditState.getTxId())) {
-                        changeEvent.setAuditData(auditState.getState());
+                if (txId != null && localAuditState != null) {
+                    if (txId.equals(localAuditState.getTxId())) {
+                        changeEvent.setAuditData(localAuditState.getState());
                     }
                     else {
-                        this.auditState.clear();
+                        localAuditState = null;
                     }
                 }
 
@@ -110,36 +111,40 @@ public class AuditMain {
                 out.collect(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(changeEvent));
             }
         }
-        
-        private AuditState retrieveAuditState() throws Exception {
-            Iterable<AuditState> state = auditState.get();
-            
-            if (state == null) {
-                return null;
-            }
-            
-            Iterator<AuditState> it = state.iterator();
-            if (!it.hasNext()) {
-                return null;
-            }
-            
-            return it.next();
-        }
 
         @Override
-        public void snapshotState(FunctionSnapshotContext context) throws Exception {
-            
-        }
-
-        @Override
-        public void initializeState(FunctionInitializationContext context) throws Exception {
+        public void open(Configuration parameters) {
             mapper = new ObjectMapper();
             SimpleModule module = new SimpleModule();
             module.addDeserializer(Message.class, new MessageDeserializer());
             mapper.registerModule(module);
+        }
 
+        @Override
+        public void snapshotState(FunctionSnapshotContext functionSnapshotContext) throws Exception {
+            if (localAuditState == null) {
+                auditState.clear();
+            }
+            else {
+                auditState.update(List.of(localAuditState));
+            }
+        }
+
+        @Override
+        public void initializeState(FunctionInitializationContext functionInitializationContext) throws Exception {
             ListStateDescriptor<AuditState> descriptor = new ListStateDescriptor<>("auditState", AuditState.class);
-            auditState = context.getOperatorStateStore().getListState(descriptor);
+            auditState = functionInitializationContext.getOperatorStateStore().getListState(descriptor);
+            List<AuditState> auditStates = Lists.newArrayList(auditState.get().iterator());
+            switch (auditStates.size()) {
+                case 0:
+                    localAuditState = null;
+                    break;
+                case 1:
+                    localAuditState = auditStates.get(0);
+                    break;
+                default: // auditStates.size() > 1
+                    throw new IllegalStateException("This mapper is supposed to always run with a parallelism of 1");
+            }
         }
     }
 }
