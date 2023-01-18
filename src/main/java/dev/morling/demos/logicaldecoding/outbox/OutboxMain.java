@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021 The original authors
+ *  Copyright 2023 The original authors
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -59,53 +59,53 @@ public class OutboxMain {
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(1);
-        
-        KafkaSink<ChangeEvent> sink = KafkaSink.<ChangeEvent>builder()
+
+        KafkaSink<ChangeEvent> sink = KafkaSink.<ChangeEvent> builder()
                 .setBootstrapServers("localhost:9092")
                 .setRecordSerializer(new OutboxSerializer())
                 .setProperty("session.timeout.ms", "45000")
                 .setProperty("acks", "all")
                 .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
                 .build();
-        
+
         env.addSource(sourceFunction)
-            .map(new ChangeEventDeserializer())
-            .filter(ce -> ce.getOp().equals("m"))
-            .sinkTo(sink);
+                .map(new ChangeEventDeserializer())
+                .filter(ce -> ce.getOp().equals("m"))
+                .sinkTo(sink);
 
         env.execute();
     }
-    
-private static class OutboxSerializer implements KafkaRecordSerializationSchema<ChangeEvent> {
 
-    private static final long serialVersionUID = 1L;
+    private static class OutboxSerializer implements KafkaRecordSerializationSchema<ChangeEvent> {
 
-    private ObjectMapper mapper;
+        private static final long serialVersionUID = 1L;
 
-    @Override
-    public ProducerRecord<byte[], byte[]> serialize(ChangeEvent element, KafkaSinkContext context, Long timestamp) {
-        try {
-            JsonNode content = element.getMessage().getContent();
+        private ObjectMapper mapper;
 
-            return new ProducerRecord<byte[], byte[]>(
-                    content.get("aggregate_type").asText(),
-                    content.get("aggregate_id").asText().getBytes(),
-                    mapper.writeValueAsBytes(content.get("payload")));
+        @Override
+        public ProducerRecord<byte[], byte[]> serialize(ChangeEvent element, KafkaSinkContext context, Long timestamp) {
+            try {
+                JsonNode content = element.getMessage().getContent();
+
+                return new ProducerRecord<byte[], byte[]>(
+                        content.get("aggregate_type").asText(),
+                        content.get("aggregate_id").asText().getBytes(),
+                        mapper.writeValueAsBytes(content.get("payload")));
+            }
+            catch (JsonProcessingException e) {
+                throw new IllegalArgumentException("Couldn't serialize outbox message", e);
+            }
         }
-        catch (JsonProcessingException e) {
-            throw new IllegalArgumentException("Couldn't serialize outbox message", e);
+
+        @Override
+        public void open(InitializationContext context, KafkaSinkContext sinkContext) throws Exception {
+            mapper = new ObjectMapper();
+            SimpleModule module = new SimpleModule();
+            module.addDeserializer(Message.class, new MessageDeserializer());
+            mapper.registerModule(module);
         }
     }
 
-    @Override
-    public void open(InitializationContext context, KafkaSinkContext sinkContext) throws Exception {
-        mapper = new ObjectMapper();
-        SimpleModule module = new SimpleModule();
-        module.addDeserializer(Message.class, new MessageDeserializer());
-        mapper.registerModule(module);
-    }
-}
-    
     public static class ChangeEventDeserializer extends RichMapFunction<String, ChangeEvent> {
 
         private static final long serialVersionUID = 1L;
@@ -114,7 +114,7 @@ private static class OutboxSerializer implements KafkaRecordSerializationSchema<
 
         public ChangeEventDeserializer() {
         }
-        
+
         @Override
         public ChangeEvent map(String value) throws Exception {
             return mapper.readValue(value, ChangeEvent.class);
