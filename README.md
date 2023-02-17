@@ -1,5 +1,7 @@
 # Logical Decoding Message Examples
 
+*NOTE:* This project has been moved over to the [Decodable examples repository](https://github.com/decodableco/examples/tree/main/postgres-logical-decoding) and this repository is not maintained any longer.
+
 Several examples demonstrating the usage of Postgres logical decoding messages,
 as emitted using the [pg_logical_emit_message()](https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-REPLICATION) function.
 
